@@ -26,6 +26,7 @@ if linkage != nil
 end
 
 target 'test' do
+  pod 'RNScreens', :path => '../node_modules/react-native-screens'
   config = use_native_modules!
 
   use_react_native!(
