@@ -59,5 +59,26 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+
+
+
+	<key>NSExceptionDomains</key>
+	<dict>
+		<key>localhost</key>
+		<dict>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+			<true/>
+		</dict>
+	</dict>
+
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_pdl-datastream._tcp</string>
+		<string>_printer._tcp</string>
+		<string>_ipp._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>$(PRODUCT_NAME) needs access to use local network</string>
+	
 </dict>
 </plist>

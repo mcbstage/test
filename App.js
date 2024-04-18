@@ -1,8 +1,10 @@
+/* eslint-disable react/self-closing-comp */
 /* eslint-disable react-native/no-inline-styles */
 /* eslint-disable no-trailing-spaces */
 /* eslint-disable curly */
 /* eslint-disable prettier/prettier */
-import React, {useEffect} from 'react';
+// 'use strict';
+import React, {useEffect, Component} from 'react';
 import {useRef, useState, useCallback} from 'react';
 import {
   SafeAreaView,
@@ -13,6 +15,7 @@ import {
   TouchableOpacity,
   TextInput,
   KeyboardAvoidingView,
+  Image,
   Button,
 } from 'react-native';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
@@ -28,25 +31,110 @@ import WebView from 'react-native-webview';
 import DeviceInfo from 'react-native-device-info';
 import {SelectList} from 'react-native-dropdown-select-list';
 import axios from 'axios';
+import {
+  discoverPrinters,
+  registerBrotherListener,
+  printImage,
+  LabelSize,
+} from 'react-native-brother-printers';
+import ViewShot from 'react-native-view-shot';
 
-const printer = initPrinter();
+// trouve les imprimantes brother sur le reseau
+async function setupPrinter() {
+  let resolvePrinterPromise;
+  const printerPromise = new Promise(resolve => {
+    resolvePrinterPromise = resolve;
+  });
 
-// const roles = {
-//   'printReceipt': () => {
-//     console.log('impression imprimante 1234');
-//   },
-//   'printSalades': () => {
-//     console.log('impression salade');
-//   },
-//   'printViandes': () => {
-//     console.log('impression viande');
-//   },
-// };
+  await discoverPrinters({});
 
-const Loading = ({ load }) => {
+  await registerBrotherListener('onDiscoverPrinters', printers => {
+    if (printers && printers.length > 0) {
+      resolvePrinterPromise(printers[0]);
+    } else {
+      console.error('No printers found');
+      resolvePrinterPromise(null);
+    }
+  });
+
+  const printer = await printerPromise;
+  return printer;
+}
+
+function initBrotherPrinter(printerFound) {
+  return {
+    'ipAddress':printerFound.ip,
+    'modelName':printerFound.serialNumber,
+  };
+}
+
+const roles = {
+  printReceipt: async (itemToPrint, printerToUse, idPrinter, navigation = null) => {
+    await printReceiptStar(printerToUse,idPrinter,itemToPrint);
+    return true;
+  },
+  printTicketPrice: (itemToPrint, printerToUse, idPrinter, navigation = null) => {
+    navigation.navigate('Etiquette', {ticket: itemToPrint, printerToUse: printerToUse, idPrinter:idPrinter});
+  },
+};
+
+// page pour imprimer l'etiquette
+const Etiquette = ({route, navigation}) => {
+  const { ticket, printerToUse, idPrinter } = route.params;
+  const [isPrinting, setIsPrinting] = useState(false);
+  
+  return (
+    <View style={styles.webContainer}>
+      
+      {!isPrinting ?
+      <><ViewShot
+          ref={e => { this.viewShot = e; } }
+          options={{ format: 'jpg', quality: 0.9 }}
+        >
+          <Text style={{ fontSize: 40, textAlign: 'center' }}>{ticket.companyName}</Text>
+          <Text style={{ fontSize: 70, textAlign: 'center' }}>{ticket.bigPrice}</Text>
+          <Text style={{ fontSize: 45, textAlign: 'center' }}>{ticket.nomArticle}</Text>
+          <Text style={{ fontSize: 33, textAlign: 'center' }}>{ticket.data}</Text>
+        </ViewShot><TouchableOpacity
+          style={styles.buttonContainer}
+          onPress={async () => {
+            let image = await this.viewShot.capture();
+            if (image) {
+              await changePrinterState(idPrinter, 1);
+              try {
+                setIsPrinting(true);
+                await printImage(printerToUse, image, {
+                  autoCut: true,
+                  labelSize: LabelSize.LabelSizeDieCutW29H90,
+                });
+                let finished = await changePrinterState(idPrinter, 0);
+                if (finished) {
+                  setIsPrinting(false);
+                }
+              } catch (err) {
+                console.error(err);
+              }
+
+            }
+          } }
+        >
+            <Text style={styles.buttonText}>Imprimer</Text>
+          </TouchableOpacity><TouchableOpacity
+            style={styles.buttonContainer}
+            onPress={() => { navigation.goBack(); } }
+          >
+            <Text style={styles.buttonText}>Retour</Text>
+          </TouchableOpacity></>
+      : <Loading load={true}/>
+    }
+    </View>
+  );
+};
+
+const Loading = ({load}) => {
   if (load) {
     return (
-      <View>
+      <View style={{flex:1, justifyContent:'center', alignContent:'center'}}>
         <ActivityIndicator size="large" color="#00A3E6" />
       </View>
     );
@@ -59,14 +147,14 @@ const Stack = createNativeStackNavigator();
 
 const getIdDevice = async () => await DeviceInfo.getUniqueId();
 
-function initPrinter() {
+function initStarPrinter(id) {
   let params = new StarConnectionSettings();
   params.interfaceType = InterfaceType.Lan;
-
+  params.identifier = id;
   return new StarPrinter(params);
 }
 
-function getJsonFromString(s) { 
+function getJsonFromString(s) {
   let match = s.match(/^\{.*?\}/s);
 
   if (match) {
@@ -78,20 +166,33 @@ function getJsonFromString(s) {
       let jsonString = match[0];
       let jsonData = JSON.parse(jsonString);
       return jsonData;
-    } 
+    }
   }
 
   return [];
 }
 
-async function getPrinters(role) {
+async function getAvailablePrinterByRole(role) {
   try {
-    const response = await axios.get(`https://dev.mcbpos.com/Locations/getPrinters/${role}`);
+    const response = await axios.get(
+      `https://dev.mcbpos.com/Locations/getPrinters/${role}`,
+    );
     if (response.data) {
-      return getJsonFromString(response.data);                
-    } 
+      return getJsonFromString(response.data);
+    }
   } catch (err) {
     console.error(err);
+  }
+}
+
+// state = 0 non | 1 oui
+async function changePrinterState(id, newState) {
+  try {
+    const response = await axios.post(`https://dev.mcbpos.com/Locations/changePrinterState/${id}/${newState}`);
+    return response.data;
+  } catch (error) {
+    console.error('Erreur lors de la requête POST:', error);
+    throw error;
   }
 }
 
@@ -146,30 +247,40 @@ function printItems(items) {
   let blocRetour = !Array.isArray(items) ? item(items) : '';
   if (items.length > 1) {
     items.forEach(i => {
-      blocRetour += item(i); 
+      blocRetour += item(i);
     });
   }
   return blocRetour;
 }
 
-async function getPrintersByLocIdHttp (locationId) {
+async function getPrintersByLocIdHttp(locationId) {
   let data = [];
   try {
-    const response = await axios.get(`https://dev.mcbpos.com/Locations/getPrintersByLocation/${locationId}`);
+    const response = await axios.get(
+      `https://dev.mcbpos.com/Locations/getPrintersByLocation/${locationId}`,
+    );
     if (response.data) {
-      data = getJsonFromString(response.data).map(p => ({key : p.printer_id, value: `${p.printer_name} - ${p.printer_id}`}));
+      data = getJsonFromString(response.data).map(p => ({
+        key: p.printer_id,
+        value: `${p.printer_name} - ${p.printer_id}`,
+      }));
     }
     return data;
   } catch (err) {
     console.error(err);
-    return [];    
+    return [];
   }
 }
 
 async function getLocationsHttp() {
   try {
-    const response = await axios.get('https://dev.mcbpos.com/Locations/getLocations');
-    const data = getJsonFromString(response.data).map(loc => ({ key: loc.location_id, value: `${loc.name}` })); 
+    const response = await axios.get(
+      'https://dev.mcbpos.com/Locations/getLocations',
+    );
+    const data = getJsonFromString(response.data).map(loc => ({
+      key: loc.location_id,
+      value: `${loc.name}`,
+    }));
     return data;
   } catch (err) {
     console.error(err);
@@ -212,14 +323,14 @@ const WarningPopUp = ({navigation}) => {
 async function addDevicePrinterLocation(url, data) {
   try {
     const response = await axios.post(url, data);
-    return response.data; 
+    return response.data;
   } catch (error) {
     console.error('Erreur lors de la requête POST:', error);
-    throw error; 
+    throw error;
   }
 }
 
-const Printers = ( {navigation} ) => {
+const Printers = ({navigation}) => {
   const [locations, setLocations] = useState([]);
   const [printers, setPrinters] = useState([]);
   const [choosedPrinter, setChoosedPrinter] = useState();
@@ -228,13 +339,12 @@ const Printers = ( {navigation} ) => {
   const [load, setLoad] = useState(false);
 
   useEffect(() => {
-    
-    async function getId () {
+    async function getId() {
       let id = await getIdDevice();
       setIdDevice(id);
     }
 
-    async function fetch () {
+    async function fetch() {
       const locs = await getLocationsHttp();
       setLocations(locs);
     }
@@ -247,60 +357,63 @@ const Printers = ( {navigation} ) => {
     <View style={styles.webContainer}>
       <Text style={styles.headerText}>Identifiant de votre appareil :</Text>
       <Text style={styles.deviceInfoText}>{idDevice}</Text>
-    
+
       <Text style={styles.headerText}>Choisissez votre location</Text>
       {locations && (
         <View style={styles.selectListContainer}>
           <SelectList
             setSelected={setSelectedLocation}
             data={locations}
-            onSelect= { async () => {
+            onSelect={async () => {
+              if (printers.length > 0) setPrinters([]);
 
-                if (printers.length > 0)
-                  setPrinters([]);
+              setLoad(true);
 
-                setLoad(true);
+              const printersInLoc = await getPrintersByLocIdHttp(
+                selectedLocation,
+              );
+              const printersOnTheNetwork = await findPrinters(printersInLoc);
+              const allPrinters = printersInLoc.concat(printersOnTheNetwork);
 
-                const printersInLoc = await getPrintersByLocIdHttp(selectedLocation);
-                const printersOnTheNetwork = await findPrinters(printersInLoc);
-                const allPrinters = printersInLoc.concat(printersOnTheNetwork);
-
-                setPrinters(allPrinters);
-              }
-            }
+              setPrinters(allPrinters);
+            }}
           />
         </View>
       )}
-     
-      {printers.length > 0 ?
-          <View style={styles.selectListContainer}>
-            <Text style={styles.headerText}>Choisissez une imprimante</Text>
-            <SelectList
-                setSelected={setChoosedPrinter}
-                data={printers}
-                style={styles.selectList}
-                disabledItemStyles={true}
-                onSelect={() => console.log(choosedPrinter)}
-            />
-          </View>
-        : <Loading load={load}/>
-      }
 
-      { choosedPrinter &&
-        <KeyboardAvoidingView style={{flex:1}}>
+      {printers.length > 0 ? (
+        <View style={styles.selectListContainer}>
+          <Text style={styles.headerText}>Choisissez une imprimante</Text>
+          <SelectList
+            setSelected={setChoosedPrinter}
+            data={printers}
+            style={styles.selectList}
+            disabledItemStyles={true}
+            onSelect={() => console.log(choosedPrinter)}
+          />
+        </View>
+      ) : (
+        <Loading load={load} />
+      )}
+
+      {choosedPrinter && (
+        <KeyboardAvoidingView style={{flex: 1}}>
           <Text style={styles.headerText}>Choisissez une imprimante</Text>
           <TextInput style={styles.input} />
         </KeyboardAvoidingView>
-      }
-      
+      )}
+
       <View>
         <TouchableOpacity
-          onPress={ async () => {
-            let res = await addDevicePrinterLocation(`https://dev.mcbpos.com/Locations/insertLocPrinterDevice/${selectedLocation}/${idDevice}/0011621DFAA5`, {});
+          onPress={async () => {
+            let res = await addDevicePrinterLocation(
+              `https://dev.mcbpos.com/Locations/insertLocPrinterDevice/${selectedLocation}/${idDevice}/0011621DFAA5`,
+              {},
+            );
             console.log(res);
-          }}  
+          }}
           style={styles.buttonContainer}>
-            <Text style={styles.buttonText}>Enregistrer les données</Text>
+          <Text style={styles.buttonText}>Enregistrer les données</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -313,9 +426,11 @@ const Printers = ( {navigation} ) => {
   );
 };
 
-const Home = ( {navigation} ) => {
+const Home = ({navigation}) => {
   const [configured, setConfigured] = useState(false);
   const webRef = useRef(null);
+  const [brother, setBrother] = useState();
+  const [isPrinting, setIsPrinting] = useState(false);
 
   // useFocusEffect(
   //   useCallback(() => {
@@ -339,12 +454,24 @@ const Home = ( {navigation} ) => {
     const data = JSON.parse(event.nativeEvent.data);
 
     if (data.type === 'printButtonClicked') {
-      if (data.action === 'printReceipt') {
-        let p = (await getPrinters(data.action))[0];
-        printer.connectionSettings.identifier = p.serialNumber;
-        await printReceipt(data.facture);
+
+      let printerFound = (await getAvailablePrinterByRole(data.action))[0];
+      let printerToUse;
+
+      if (printerFound && parseInt(printerFound.isPrinting, 10) === 0) {
+        if (printerFound.modele === 'star') {
+          printerToUse = initStarPrinter(printerFound.serialNumber);
+          setIsPrinting(true);
+        } else {
+          printerToUse = initBrotherPrinter(printerFound);
+        }
+        let finished = await roles[data.action](data.item, printerToUse, printerFound.id, navigation);
+        if (finished) {
+          setIsPrinting(false);
+        }
       }
     }
+
     if (data.type === 'openDrawer') {
       openCashDrawer();
     }
@@ -352,17 +479,16 @@ const Home = ( {navigation} ) => {
 
   return (
     <SafeAreaView style={{flex: 1, backgroundColor: 'white'}}>
-      <WebView
+      {!isPrinting ? <WebView
         style={styles.webView}
         source={{uri: 'https://dev.mcbpos.com/dev4dev4'}}
         onNavigationStateChange={handleNavigationStateChange}
         javaScriptEnabled={true}
         ref={webRef}
         onMessage={onWebViewMessage}
-      />
-      {/* {!configured && <WarningPopUp navigation={navigation} />} */}
+      /> : <Loading load={true} /> }
     </SafeAreaView>
-  );  
+  );
 };
 
 function printInfo(o, data) {
@@ -379,7 +505,7 @@ function printInfo(o, data) {
   return contenu;
 }
 
-async function printLogo() {
+async function printLogo(printer) {
   let builder = new StarXpandCommand.StarXpandCommandBuilder();
   builder.addDocument(
     new StarXpandCommand.DocumentBuilder().addPrinter(
@@ -393,18 +519,19 @@ async function printLogo() {
   );
 
   let commands = await builder.getCommands();
-  await handlePrinter(commands);
+  await handlePrinter(printer, commands);
 }
 
 function printIfNotNull(champ, data) {
   return !data ? '' : `${champ} : ${data}\n`;
 }
 
-async function printReceipt(receipt = null) {
+async function printReceiptStar(printer, idPrinter, receipt = null) {
   let client = {};
   if (receipt.client) {
     client = receipt.client;
   }
+  await changePrinterState(idPrinter,1);
 
   try {
     let builder = new StarXpandCommand.StarXpandCommandBuilder();
@@ -451,19 +578,22 @@ async function printReceipt(receipt = null) {
     );
 
     let commands = await builder.getCommands();
-    await handlePrinter(commands);
+    await handlePrinter(printer, commands);
 
     if (receipt.paymentType === 'Comptant') {
       await openCashDrawer();
     }
-    await printLogo();
+
+    await changePrinterState(idPrinter,0);
+
+    await printLogo(printer);
     console.log('ok');
   } catch (error) {
     console.error('error : ', error);
   }
 }
-
-async function handlePrinter(commands) {
+// star
+async function handlePrinter(printer, commands) {
   await printer.open();
   await printer.print(commands);
 
@@ -471,7 +601,7 @@ async function handlePrinter(commands) {
   await printer.dispose();
 }
 
-async function openCashDrawer() {
+async function openCashDrawer(printer) {
   try {
     var builder = new StarXpandCommand.StarXpandCommandBuilder();
     builder.addDocument(
@@ -485,7 +615,7 @@ async function openCashDrawer() {
     );
 
     let commands = await builder.getCommands();
-    await handlePrinter(commands);
+    await handlePrinter(printer, commands);
   } catch (err) {
     console.error(err);
   }
@@ -493,29 +623,27 @@ async function openCashDrawer() {
 
 function containsPrinter(ps, id) {
   for (const pr in ps) {
-    if (ps[pr].key === id) 
-      return true;
+    if (ps[pr].key === id) return true;
   }
   return false;
 }
 
-// affiche les identifiants des imprimantes connectees sur le reseaux
+// affiche les identifiants des imprimantes STAR connectees sur le reseaux
 async function findPrinters() {
   return new Promise((resolve, reject) => {
-    let prs = [];
     StarDeviceDiscoveryManagerFactory.create([InterfaceType.Lan])
       .then(managerResearch => {
-        managerResearch.discoveryTime = 2000; 
+        managerResearch.discoveryTime = 2000;
         managerResearch.onPrinterFound = p => {
-          console.log(p.connectionSettings.identifier);
+          console.log(p.connectionSettings);
         };
         managerResearch.onDiscoveryFinished = () => {
-          resolve(prs); 
+          console.log('fini');
         };
         return managerResearch.startDiscovery();
       })
       .catch(error => {
-        reject(error); 
+        reject(error);
       });
   });
 }
@@ -530,8 +658,8 @@ function App() {
           options={{headerShown: false}}
         />
         <Stack.Screen
-          name="Printers"
-          component={Printers}
+          name="Etiquette"
+          component={Etiquette}
           options={{headerShown: false}}
         />
       </Stack.Navigator>
@@ -549,7 +677,7 @@ const styles = StyleSheet.create({
   },
   webContainer: {
     flex: 1,
-    padding: 20,
+    padding: 10,
     backgroundColor: '#f0f0f0',
     justifyContent: 'center',
   },
@@ -619,13 +747,27 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     marginVertical: 10,
     width: 250,
-    marginTop:15,
+    marginTop: 15,
   },
   input: {
     height: 40,
     margin: 12,
     borderWidth: 1,
     padding: 10,
+  },
+  captureArea: {
+    flexDirection: 'row',
+    padding: 20,
+    backgroundColor: 'white',
+  },
+  viewShotContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  image: {
+    width: 100,
+    height: 100,
   },
 });
 
