@@ -62,27 +62,37 @@ async function setupPrinter() {
 }
 
 function initBrotherPrinter(printerFound) {
+  // let labelSize = parseInt(printerFound.labelSize,10);
   return {
     'ipAddress':printerFound.ip,
     'modelName':printerFound.serialNumber,
+    'labelSize': parseInt(printerFound.ticketSize, 10),
   };
 }
 
 const roles = {
-  printReceipt: async (itemToPrint, printerToUse, idPrinter, navigation = null) => {
+  printReceipt: async (itemToPrint, printerToUse, idPrinter, navigation = null, type = null) => {
     await printReceiptStar(printerToUse,idPrinter,itemToPrint);
     return true;
   },
-  printTicketPrice: (itemToPrint, printerToUse, idPrinter, navigation = null) => {
-    navigation.navigate('Etiquette', {ticket: itemToPrint, printerToUse: printerToUse, idPrinter:idPrinter});
+  printTicketPrice: (itemToPrint, printerToUse, idPrinter, navigation = null, type = 'price') => {
+    navigation.navigate('Etiquette', {ticket: itemToPrint, printerToUse: printerToUse, idPrinter:idPrinter, type: type});
+  },
+  printTicketCode: (itemToPrint, printerToUse, idPrinter, navigation = null, type = 'price') => {
+    navigation.navigate('Etiquette', {ticket: itemToPrint, printerToUse: printerToUse, idPrinter:idPrinter, type: type});
   },
 };
 
 // page pour imprimer l'etiquette
-const Etiquette = ({route, navigation}) => {
-  const { ticket, printerToUse, idPrinter } = route.params;
+const PriceTicketPage = ({route, navigation}) => {
+
+  const { ticket, printerToUse, idPrinter, type } = route.params;
   const [isPrinting, setIsPrinting] = useState(false);
   
+  console.log(type);
+
+  console.log(printerToUse);
+
   return (
     <View style={styles.webContainer}>
       
@@ -92,8 +102,14 @@ const Etiquette = ({route, navigation}) => {
           options={{ format: 'jpg', quality: 0.9 }}
         >
           <Text style={{ fontSize: 40, textAlign: 'center' }}>{ticket.companyName}</Text>
-          <Text style={{ fontSize: 70, textAlign: 'center' }}>{ticket.bigPrice}</Text>
           <Text style={{ fontSize: 45, textAlign: 'center' }}>{ticket.nomArticle}</Text>
+          {type === 'code' && <Image
+            style={styles.image}
+            source={{
+              uri: ticket.barcodeId,
+            }}
+          />}
+          <Text style={{ fontSize: 70, textAlign: 'center' }}>{ticket.bigPrice}</Text>
           <Text style={{ fontSize: 33, textAlign: 'center' }}>{ticket.data}</Text>
         </ViewShot><TouchableOpacity
           style={styles.buttonContainer}
@@ -105,7 +121,7 @@ const Etiquette = ({route, navigation}) => {
                 setIsPrinting(true);
                 await printImage(printerToUse, image, {
                   autoCut: true,
-                  labelSize: LabelSize.LabelSizeDieCutW29H90,
+                  labelSize: printerToUse.labelSize,
                 });
                 let finished = await changePrinterState(idPrinter, 0);
                 if (finished) {
@@ -427,24 +443,8 @@ const Printers = ({navigation}) => {
 };
 
 const Home = ({navigation}) => {
-  const [configured, setConfigured] = useState(false);
   const webRef = useRef(null);
-  const [brother, setBrother] = useState();
   const [isPrinting, setIsPrinting] = useState(false);
-
-  // useFocusEffect(
-  //   useCallback(() => {
-  //     const fetchData = async () => {
-  //       const data = await getDevicePrinterHttp();
-  //       if (data.length > 0) {
-  //         setConfigured(true);
-  //       } else {
-  //         setConfigured(false);
-  //       }
-  //     };
-  //     fetchData();
-  //   }, []),
-  // );
 
   const handleNavigationStateChange = navState => {
     console.log(`Url en cours : ${navState.url}`);
@@ -454,10 +454,10 @@ const Home = ({navigation}) => {
     const data = JSON.parse(event.nativeEvent.data);
 
     if (data.type === 'printButtonClicked') {
-
+      console.log(data.action);
       let printerFound = (await getAvailablePrinterByRole(data.action))[0];
       let printerToUse;
-
+      console.log(printerFound);
       if (printerFound && parseInt(printerFound.isPrinting, 10) === 0) {
         if (printerFound.modele === 'star') {
           printerToUse = initStarPrinter(printerFound.serialNumber);
@@ -465,7 +465,11 @@ const Home = ({navigation}) => {
         } else {
           printerToUse = initBrotherPrinter(printerFound);
         }
-        let finished = await roles[data.action](data.item, printerToUse, printerFound.id, navigation);
+
+        console.log(data.action);
+
+        let finished = await roles[data.action](data.item, printerToUse, printerFound.id, navigation, data.ticket);
+
         if (finished) {
           setIsPrinting(false);
         }
@@ -659,7 +663,7 @@ function App() {
         />
         <Stack.Screen
           name="Etiquette"
-          component={Etiquette}
+          component={PriceTicketPage}
           options={{headerShown: false}}
         />
       </Stack.Navigator>
@@ -766,8 +770,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   image: {
-    width: 100,
-    height: 100,
+    height: 200,
   },
 });
 
