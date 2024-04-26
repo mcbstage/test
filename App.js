@@ -88,8 +88,6 @@ const PriceTicketPage = ({route, navigation}) => {
 
   const { ticket, printerToUse, idPrinter, type } = route.params;
   const [isPrinting, setIsPrinting] = useState(false);
-  
-  console.log(type);
 
   console.log(printerToUse);
 
@@ -452,13 +450,13 @@ const Home = ({navigation}) => {
 
   const onWebViewMessage = async event => {
     const data = JSON.parse(event.nativeEvent.data);
-
     if (data.type === 'printButtonClicked') {
       console.log(data.action);
       let printerFound = (await getAvailablePrinterByRole(data.action))[0];
       let printerToUse;
       console.log(printerFound);
       if (printerFound && parseInt(printerFound.isPrinting, 10) === 0) {
+
         if (printerFound.modele === 'star') {
           printerToUse = initStarPrinter(printerFound.serialNumber);
           setIsPrinting(true);
@@ -532,6 +530,7 @@ function printIfNotNull(champ, data) {
 
 async function printReceiptStar(printer, idPrinter, receipt = null) {
   let client = {};
+  console.log(printer);
   if (receipt.client) {
     client = receipt.client;
   }
@@ -585,7 +584,7 @@ async function printReceiptStar(printer, idPrinter, receipt = null) {
     await handlePrinter(printer, commands);
 
     if (receipt.paymentType === 'Comptant') {
-      await openCashDrawer();
+      await openCashDrawer(printer);
     }
 
     await changePrinterState(idPrinter,0);
